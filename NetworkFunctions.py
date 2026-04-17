@@ -1,11 +1,14 @@
 import re
-import pynldas2 as nldas
-import pygeohydro as gh
-import py3dep
-import numpy as np
-from math import radians, sin, cos, sqrt, atan2, degrees
-from datetime import datetime
 import math
+from ast import literal_eval
+from datetime import datetime
+from math import radians, sin, cos, sqrt, atan2, degrees
+
+import numpy as np
+import pandas as pd
+import py3dep
+import pygeohydro as gh
+import pynldas2 as nldas
 
 
 def find_node_by_name(connections, target):
@@ -99,6 +102,100 @@ def getWeatherByCoords(lon,lat,start,end):
 
     data =nldas.get_bycoords(list(zip([lon],[lat])),start,end) 
     return data
+
+def weather_to_dataframe(timeframe):
+    """
+    Normalize a weather query result into a flat pandas DataFrame.
+
+    The pynldas2 client can return dataframe-like objects depending on the
+    query shape. This helper converts those variants into a consistent table
+    with an explicit ``time`` column when available.
+
+    Args:
+    timeframe: Weather query result returned by ``getWeatherByCoords``.
+
+    Returns:
+    pd.DataFrame: Flat dataframe containing one row per hour.
+    """
+    if isinstance(timeframe, pd.DataFrame):
+        df = timeframe.copy()
+    elif hasattr(timeframe, "to_dataframe"):
+        df = timeframe.to_dataframe()
+    elif isinstance(timeframe, dict):
+        df = pd.DataFrame(timeframe)
+    else:
+        raise TypeError(f"Unsupported weather data type: {type(timeframe)!r}")
+
+    df = df.reset_index()
+
+    if "index" in df.columns and "time" not in df.columns:
+        df = df.rename(columns={"index": "time"})
+
+    # Some xarray conversions include point metadata columns that are constant
+    # for a single coordinate. Keeping them is fine, but we ensure time is
+    # parsed when present so downstream hourly exports are reliable.
+    if "time" in df.columns:
+        df["time"] = pd.to_datetime(df["time"])
+
+    if {"wind_u", "wind_v"}.issubset(df.columns):
+        wind_speed_mps = np.sqrt(np.square(df["wind_u"]) + np.square(df["wind_v"]))
+        df["wind_speed_mps"] = wind_speed_mps
+        df["wind_speed_mph"] = wind_speed_mps * 2.23694
+
+    return df
+
+def export_hourly_nldas_csv(nodes, start, end, output_csv):
+    """
+    Query NLDAS for every node and store all hourly rows in one CSV.
+
+    The exported file is a tidy table: each row corresponds to one node at one
+    hour, which makes it much easier to analyze a full day instead of
+    accidentally treating only the first hour as the whole dataset.
+
+    Args:
+    nodes (pd.DataFrame): Node table containing latitude/longitude columns or a
+        ``coords`` column with ``(lon, lat)`` tuples.
+    start (str): Start timestamp passed to ``getWeatherByCoords``.
+    end (str): End timestamp passed to ``getWeatherByCoords``.
+    output_csv (str): Path where the combined hourly CSV should be written.
+
+    Returns:
+    pd.DataFrame: Combined hourly weather table for all nodes.
+    """
+    hourly_frames = []
+
+    for node_idx, row in nodes.iterrows():
+        if {"longitude", "latitude"}.issubset(nodes.columns):
+            lon = float(row["longitude"])
+            lat = float(row["latitude"])
+        elif "coords" in nodes.columns:
+            lon, lat = literal_eval(str(row["coords"]))
+            lon = float(lon)
+            lat = float(lat)
+        else:
+            raise KeyError(
+                "nodes must contain either 'longitude'/'latitude' columns "
+                "or a 'coords' column."
+            )
+
+        timeframe = getWeatherByCoords(lon, lat, start, end)
+        hourly_df = weather_to_dataframe(timeframe)
+
+        hourly_df["node_index"] = node_idx
+        hourly_df["node_id"] = row["id"] if "id" in nodes.columns else node_idx
+        hourly_df["node_name"] = row["name"] if "name" in nodes.columns else str(node_idx)
+        hourly_df["latitude"] = lat
+        hourly_df["longitude"] = lon
+
+        if "time" in hourly_df.columns:
+            hourly_df["date"] = hourly_df["time"].dt.date
+            hourly_df["hour"] = hourly_df["time"].dt.hour
+
+        hourly_frames.append(hourly_df)
+
+    combined = pd.concat(hourly_frames, ignore_index=True)
+    combined.to_csv(output_csv, index=False)
+    return combined
 
 def getLandCover(coords):
     """
