@@ -28,6 +28,19 @@ FEATURE_FILE_NAMES = {
 }
 
 
+def read_node_id_map(path: Path | None) -> dict[str, int] | None:
+    if path is None or not path.exists():
+        return None
+
+    nodes = pd.read_csv(path)
+    required = {"id", "station_id"}
+    if nodes.empty or not required.issubset(nodes.columns):
+        return None
+
+    mapping = dict(zip(nodes["station_id"].astype(str), nodes["id"].astype(int)))
+    return mapping
+
+
 def read_station_catalog(path: Path) -> pd.DataFrame | None:
     if not path.exists():
         return None
@@ -241,6 +254,7 @@ def export_daily_feature_datasets(
     weather: pd.DataFrame,
     stations: pd.DataFrame,
     output_root: Path,
+    node_id_map: dict[str, int] | None = None,
 ) -> dict[str, dict[date, pd.DataFrame]]:
     if not isinstance(weather.index, pd.MultiIndex) or not {"station", "time"}.issubset(weather.index.names):
         raise ValueError("weather must have a MultiIndex with 'station' and 'time' levels.")
@@ -276,6 +290,9 @@ def export_daily_feature_datasets(
             )
             daily_matrix.columns = [f"hour_{hour:02d}" for hour in daily_matrix.columns]
             daily_matrix = fill_daily_matrix(daily_matrix, station_coords)
+            if node_id_map is not None:
+                daily_matrix.index = daily_matrix.index.map(lambda station_id: node_id_map[str(station_id)])
+                daily_matrix.index.name = "id"
             daily_feature_datasets[feature][date_value] = daily_matrix
 
             date_folder = output_root / f"{date_value.month}_{date_value.day}_{str(date_value.year)[-2:]}"
@@ -308,6 +325,12 @@ def parse_args() -> argparse.Namespace:
         default=Path("WeatherData"),
         help="Directory where daily datasets will be written.",
     )
+    parser.add_argument(
+        "--node-list-csv",
+        type=Path,
+        default=Path("Florida_meteo_nodeList.csv"),
+        help="Optional node list with numeric ids and station_id mapping for exported datasets.",
+    )
     parser.add_argument("--start-year", type=int, default=2018)
     parser.add_argument("--start-month", type=int, default=1)
     parser.add_argument("--start-day", type=int, default=1)
@@ -332,6 +355,11 @@ def main() -> None:
         fallback_path=args.fallback_stations_csv,
         refresh=args.refresh_stations,
     )
+    node_id_map = read_node_id_map(args.node_list_csv)
+    if node_id_map is not None:
+        print(f"Loaded numeric node id mapping from {args.node_list_csv}")
+    else:
+        print("No valid numeric node id mapping found; exports will use station ids.")
     print(f"Using {len(stations)} Florida stations")
 
     weather = fetch_hourly_weather(stations, start, end)
@@ -342,7 +370,12 @@ def main() -> None:
     print("\nMissing values after hourly fill:")
     print(weather.isna().sum())
 
-    daily_feature_datasets = export_daily_feature_datasets(weather, stations, args.output_dir)
+    daily_feature_datasets = export_daily_feature_datasets(
+        weather,
+        stations,
+        args.output_dir,
+        node_id_map=node_id_map,
+    )
 
     print(f"\nSaved daily datasets under: {args.output_dir.resolve()}")
     print(f"Total stations expected in each dataset: {stations['id'].astype(str).nunique()}")
