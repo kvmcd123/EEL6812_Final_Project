@@ -1,0 +1,4 @@
+dataset_name,model_name,model_label,checkpoint,overall_mae,overall_mse,overall_rmse,n_predictions,nodes
+full_us,GraphNN,GraphNN,full_us_GraphNN_checkpoint.pt,1.016031265258789,2.2986435890197754,1.5161278247833252,4779456,2728
+full_us,GraphRNN,GraphRNN,full_us_GraphRNN_checkpoint.pt,1.0270122289657593,2.2941060066223145,1.514630675315857,4779456,2728
+full_us,baseline_lstm,Baseline LSTM,full_us_baseline_lstm_checkpoint.pt,1.0541435480117798,2.5096521377563477,1.5841882228851318,4779456,2728

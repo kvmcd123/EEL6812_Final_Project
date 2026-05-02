@@ -1,1 +1,7 @@
-saved_models/temp_only_graphsage_checkpoint.pt
+saved_models/full_us_baseline_lstm_checkpoint.pt
+saved_models/full_us_GraphNN_checkpoint.pt
+saved_models/full_us_GraphRNN_checkpoint.pt
+WeatherData/full_us.zip
+WeatherData/florida_test/
+WeatherData/florida/
+old_files/
